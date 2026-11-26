@@ -1,12 +1,11 @@
-# Environment & Secrets
+# Environment & Secrets (NEVER commit)
 .env
 .env.*
-backend/.env
-backend/.env.*
+**/.env
+**/.env.*
 
 # Python
 backend/.venv/
-backend/__pycache__/
 **/__pycache__/
 *.pyc
 backend/chroma_db/
@@ -16,10 +15,9 @@ frontend/node_modules/
 frontend/dist/
 .vite/
 
-# Firebase
+# Firebase & Logs
 .firebase/
-firebase-debug.log
-firebase-debug.*.log
+*.log
 
 # OS / Editor
 .DS_Store
