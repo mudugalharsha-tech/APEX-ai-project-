@@ -7,6 +7,28 @@ import {
 import { Loader2, LogIn, Mail, Lock, UserPlus, X } from 'lucide-react';
 import { auth, googleProvider, isFirebaseConfigured } from '../firebase';
 
+function formatAuthError(err) {
+  const code = err?.code || '';
+  switch (code) {
+    case 'auth/operation-not-allowed':
+      return 'This sign-in method is not enabled yet. Enable Email/Password and Google in Firebase Console → Authentication → Sign-in method.';
+    case 'auth/unauthorized-domain':
+      return `Domain "${window.location.hostname}" is not authorized. Open the app at http://localhost:5173 or add this domain in Firebase Console → Authentication → Settings → Authorized domains.`;
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Invalid email or password.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Try signing in instead.';
+    case 'auth/popup-blocked':
+      return 'Sign-in popup was blocked by your browser. Please allow popups for this site.';
+    case 'auth/popup-closed-by-user':
+      return 'Sign-in popup was closed before completing login.';
+    default:
+      return err?.message || 'Authentication failed.';
+  }
+}
+
 export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
   const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState('');
@@ -32,7 +54,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
       onAuthSuccess?.(cred.user);
       onClose();
     } catch (err) {
-      setError(err.message || 'Authentication failed.');
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
@@ -50,7 +72,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
       onAuthSuccess?.(cred.user);
       onClose();
     } catch (err) {
-      setError(err.message || 'Google sign-in failed.');
+      setError(formatAuthError(err));
     } finally {
       setIsLoading(false);
     }
