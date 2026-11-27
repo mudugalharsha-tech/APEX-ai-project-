@@ -333,6 +333,23 @@ export default function ChatPanel({
             )}
           </button>
         </div>
+
+        {/* Attribution & Contact Footer */}
+        <footer className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+          <span>
+            Built by <strong className="font-medium text-slate-300">Mudugal Sai Harsha Vardhan</strong>
+          </span>
+          <span aria-hidden="true">•</span>
+          <span>
+            Contact:{' '}
+            <a
+              href="mailto:mudugalharsha@gmail.com"
+              className="text-amber-400/90 hover:text-amber-300 underline underline-offset-2 transition-colors"
+            >
+              mudugalharsha@gmail.com
+            </a>
+          </span>
+        </footer>
       </form>
     </main>
   );

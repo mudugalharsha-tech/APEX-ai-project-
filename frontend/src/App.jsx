@@ -8,11 +8,38 @@ import RagInspectorDrawer from './components/RagInspectorDrawer';
 
 const DataGalaxy3D = lazy(() => import('./components/DataGalaxy3D'));
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 const SOURCES_STORAGE_KEY = 'aura_rag_sources';
 const SESSIONS_STORAGE_KEY = 'aura_rag_sessions';
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const MODEL_STORAGE_KEY = 'openrouter_model';
+const DEVICE_ID_KEY = 'aura_device_id';
+const DEVICE_SECRET_KEY = 'aura_device_secret';
+
+function getDeviceHeaders() {
+  let deviceId = localStorage.getItem(DEVICE_ID_KEY);
+  let deviceSecret = localStorage.getItem(DEVICE_SECRET_KEY);
+
+  if (!deviceId || deviceId.length < 16) {
+    deviceId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+    localStorage.setItem(DEVICE_ID_KEY, deviceId);
+  }
+
+  if (!deviceSecret || deviceSecret.length < 32) {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    deviceSecret = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem(DEVICE_SECRET_KEY, deviceSecret);
+  }
+
+  return {
+    'X-Device-ID': deviceId,
+    'X-Device-Secret': deviceSecret,
+  };
+}
 
 function loadPersistedJson(key, fallback) {
   try {
@@ -220,6 +247,7 @@ export default function App() {
 
         const res = await fetch(`${API_BASE}/upload-file`, {
           method: 'POST',
+          headers: getDeviceHeaders(),
           body: formData,
         });
         const data = await res.json();
@@ -257,7 +285,10 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/upload-url`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getDeviceHeaders(),
+        },
         body: JSON.stringify({ url }),
       });
       const data = await res.json();
@@ -279,7 +310,10 @@ export default function App() {
     setIsUploading(true);
     setUploadError('');
     try {
-      const res = await fetch(`${API_BASE}/reset`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/reset`, {
+        method: 'DELETE',
+        headers: getDeviceHeaders(),
+      });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.detail || 'Failed to reset knowledge base.');
@@ -328,7 +362,10 @@ export default function App() {
 
       const res = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getDeviceHeaders(),
+        },
         body: JSON.stringify({
           question,
           chat_history: chatHistory,

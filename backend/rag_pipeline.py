@@ -1,4 +1,8 @@
+import hashlib
+import ipaddress
 import os
+import re
+import socket
 import time
 import uuid
 from pathlib import Path
@@ -31,7 +35,18 @@ load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(BACKEND_DIR.parent / ".env")
 os.environ.setdefault("USER_AGENT", "AuraRAG/1.0")
 
-COLLECTION_NAME = "rag_documents"
+COLLECTION_PREFIX = "dev_"
+DEVICE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{16,64}$")
+
+
+def get_device_collection_name(device_id: str, device_secret: str) -> str:
+    """Derive an isolated, unguessable Chroma collection name per device."""
+    if not device_id or not DEVICE_ID_RE.match(device_id):
+        raise ValueError("Invalid or missing X-Device-ID header.")
+    if not device_secret or len(device_secret.strip()) < 32:
+        raise ValueError("Invalid or missing X-Device-Secret header.")
+    digest = hashlib.sha256(f"{device_id}:{device_secret.strip()}".encode("utf-8")).hexdigest()
+    return f"{COLLECTION_PREFIX}{digest[:32]}"
 
 
 class MissingAPIKeyError(Exception):
@@ -82,11 +97,12 @@ class RAGPipeline:
             chunk_size=1000,
             chunk_overlap=200,
         )
-        self.vector_store = self._init_vector_store()
 
-    def _init_vector_store(self) -> Chroma:
+    def _get_vector_store(self, device_id: str, device_secret: str) -> Chroma:
+        """Return the isolated Chroma collection for the given device credentials."""
+        collection_name = get_device_collection_name(device_id, device_secret)
         return Chroma(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection_name,
             embedding_function=self.embeddings,
             persist_directory=self.persist_dir,
         )
@@ -148,9 +164,15 @@ class RAGPipeline:
         return docs, file_type
 
     def _ingest_documents(
-        self, docs: List[Document], source_name: str, source_type: str
+        self,
+        docs: List[Document],
+        source_name: str,
+        source_type: str,
+        device_id: str,
+        device_secret: str,
     ) -> Dict[str, Any]:
-        """Split documents into chunks, attach source metadata, and store in Chroma."""
+        """Split documents into chunks, attach source metadata, and store in device's Chroma."""
+        vector_store = self._get_vector_store(device_id, device_secret)
         source_id = str(uuid.uuid4())
         for doc in docs:
             doc.metadata = {
@@ -164,7 +186,7 @@ class RAGPipeline:
         if not chunks:
             raise ValueError(f"No extractable text found in '{source_name}'.")
 
-        self.vector_store.add_documents(chunks)
+        vector_store.add_documents(chunks)
         return {
             "id": source_id,
             "name": source_name,
@@ -172,16 +194,34 @@ class RAGPipeline:
             "chunks_added": len(chunks),
         }
 
-    def ingest_file(self, file_path: str, original_filename: str) -> Dict[str, Any]:
-        """Load, chunk, and index an uploaded file."""
+    def ingest_file(
+        self,
+        file_path: str,
+        original_filename: str,
+        device_id: str,
+        device_secret: str,
+    ) -> Dict[str, Any]:
+        """Load, chunk, and index an uploaded file for a specific device."""
         docs, file_type = self._load_file_documents(file_path, original_filename)
-        return self._ingest_documents(docs, original_filename, file_type)
+        return self._ingest_documents(docs, original_filename, file_type, device_id, device_secret)
 
-    def ingest_url(self, url: str) -> Dict[str, Any]:
-        """Load, chunk, and index a Web URL or YouTube link."""
+    def ingest_url(self, url: str, device_id: str, device_secret: str) -> Dict[str, Any]:
+        """Load, chunk, and index a Web URL or YouTube link (with SSRF protection)."""
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("Invalid URL. Please provide a valid http:// or https:// URL.")
+
+        hostname = (parsed.hostname or "").lower()
+        if not hostname or hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or hostname.endswith((".local", ".internal")):
+            raise ValueError("Private or local network URLs are not allowed.")
+
+        try:
+            resolved_ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+                raise ValueError("Private or internal IP addresses are not allowed.")
+        except socket.gaierror:
+            pass
 
         if is_youtube_url(url):
             loader = YoutubeLoader.from_youtube_url(url, add_video_info=False)
@@ -192,7 +232,7 @@ class RAGPipeline:
             docs = loader.load()
             source_type = "web"
 
-        return self._ingest_documents(docs, url, source_type)
+        return self._ingest_documents(docs, url, source_type, device_id, device_secret)
 
     def _format_chat_history(self, chat_history: Optional[List[Any]]) -> List[Any]:
         """Normalize incoming chat history into LangChain HumanMessage / AIMessage objects."""
@@ -216,13 +256,16 @@ class RAGPipeline:
     def query_rag(
         self,
         question: str,
+        device_id: str,
+        device_secret: str,
         chat_history: Optional[List[Any]] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         response_style: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run history-aware retrieval and return the AI answer, sources, and X-Ray telemetry."""
+        """Run history-aware retrieval on this device's isolated collection and return telemetry."""
         total_start = time.perf_counter()
+        vector_store = self._get_vector_store(device_id, device_secret)
         resolved_model = (model or "").strip() or self.model_name
         llm = self.get_llm(api_key=api_key, model=resolved_model)
         formatted_history = self._format_chat_history(chat_history)
@@ -279,14 +322,14 @@ class RAGPipeline:
         else:
             reformulated_query = question
 
-        # Step 2: Check vector store count & filter by 0.35 similarity threshold
+        # Step 2: Check device's vector store count & filter by 0.35 similarity threshold
         RELEVANCE_THRESHOLD = 0.35
         doc_count = 0
         raw_results: List[Tuple[Document, float]] = []
         try:
-            doc_count = self.vector_store._collection.count()
+            doc_count = vector_store._collection.count()
             if doc_count > 0:
-                raw_results = self.vector_store.similarity_search_with_relevance_scores(
+                raw_results = vector_store.similarity_search_with_relevance_scores(
                     reformulated_query, k=4
                 )
         except Exception:
@@ -460,21 +503,27 @@ class RAGPipeline:
     def chat(
         self,
         question: str,
+        device_id: str,
+        device_secret: str,
         chat_history: Optional[List[Any]] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        response_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.query_rag(
             question=question,
+            device_id=device_id,
+            device_secret=device_secret,
             chat_history=chat_history,
             api_key=api_key,
             model=model,
+            response_style=response_style,
         )
 
-    def reset(self) -> None:
-        """Clear all indexed documents from the Chroma vector store."""
+    def reset(self, device_id: str, device_secret: str) -> None:
+        """Clear all indexed documents for this device's isolated Chroma collection."""
+        vector_store = self._get_vector_store(device_id, device_secret)
         try:
-            self.vector_store.delete_collection()
+            vector_store.delete_collection()
         except Exception:
             pass
-        self.vector_store = self._init_vector_store()
