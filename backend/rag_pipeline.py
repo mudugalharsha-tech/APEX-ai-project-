@@ -22,12 +22,26 @@ from langchain_community.document_loaders import (
     WebBaseLoader,
     YoutubeLoader,
 )
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+class ONNXMiniLMEmbeddings(Embeddings):
+    """Lightweight ONNX all-MiniLM-L6-v2 embeddings (~180MB RAM, no PyTorch required)."""
+
+    def __init__(self) -> None:
+        self._ef = DefaultEmbeddingFunction()
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [[float(x) for x in vec] for vec in self._ef(texts)]
+
+    def embed_query(self, text: str) -> List[float]:
+        return [float(x) for x in self._ef([text])[0]]
 
 # Load backend/.env first; fall back to workspace root .env if needed
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -90,9 +104,7 @@ class RAGPipeline:
         persist_path.mkdir(parents=True, exist_ok=True)
         self.persist_dir = str(persist_path)
 
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        self.embeddings = ONNXMiniLMEmbeddings()
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
