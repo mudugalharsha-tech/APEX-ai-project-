@@ -223,7 +223,13 @@ function FileNode({ source, index, total, isCited, isResetting }) {
 /**
  * Applies subtle mouse-synced camera sway / parallax without fighting OrbitControls.
  */
-function GalaxyStage({ sourcesList, activeSources, isThinking, isResetting }) {
+function GalaxyStage({
+  sourcesList,
+  activeSources,
+  hoveredSource,
+  isThinking,
+  isResetting,
+}) {
   const stageRef = useRef();
 
   useFrame((state) => {
@@ -259,7 +265,7 @@ function GalaxyStage({ sourcesList, activeSources, isThinking, isResetting }) {
           source={src}
           index={idx}
           total={sourcesList.length}
-          isCited={activeSources.includes(src.name)}
+          isCited={activeSources.includes(src.name) || hoveredSource === src.name}
           isResetting={isResetting}
         />
       ))}
@@ -270,6 +276,7 @@ function GalaxyStage({ sourcesList, activeSources, isThinking, isResetting }) {
 export default function DataGalaxy3D({
   sourcesList = [],
   activeSources = [],
+  hoveredSource = null,
   isThinking = false,
   isResetting = false,
 }) {
@@ -288,6 +295,7 @@ export default function DataGalaxy3D({
         <GalaxyStage
           sourcesList={sourcesList}
           activeSources={activeSources}
+          hoveredSource={hoveredSource}
           isThinking={isThinking}
           isResetting={isResetting}
         />

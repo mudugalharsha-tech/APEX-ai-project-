@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://steady-inverter-1mbw7.web.app/sitemap.xml

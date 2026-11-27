@@ -1,12 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Database, History, MessageSquare } from 'lucide-react';
 import KnowledgeSidebar from './components/KnowledgeSidebar';
 import ChatPanel from './components/ChatPanel';
-import DataGalaxy3D from './components/DataGalaxy3D';
 import ToastContainer from './components/ToastContainer';
 import SettingsModal from './components/SettingsModal';
-import AuthModal from './components/AuthModal';
-import { auth, isFirebaseConfigured } from './firebase';
+import RagInspectorDrawer from './components/RagInspectorDrawer';
+
+const DataGalaxy3D = lazy(() => import('./components/DataGalaxy3D'));
 
 const API_BASE = 'http://localhost:8000';
 const SOURCES_STORAGE_KEY = 'aura_rag_sources';
@@ -60,8 +60,20 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [user, setUser] = useState(null);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [responseStyle, setResponseStyle] = useState('tailored');
+  const [mobileView, setMobileView] = useState('chat'); // 'chat' | 'sources' | 'history' | 'xray'
+  const [sidebarTab, setSidebarTab] = useState('sources');
+
+  // RAG & LangChain X-Ray Inspector state
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [inspectedTelemetry, setInspectedTelemetry] = useState(null);
+  const [pendingQuestion, setPendingQuestion] = useState('');
+  const [hoveredSource, setHoveredSource] = useState(null);
+  const [sessionTotals, setSessionTotals] = useState({
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  });
 
   const dismissToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -174,20 +186,6 @@ export default function App() {
   useEffect(() => {
     fetchModels();
   }, [fetchModels]);
-
-  useEffect(() => {
-    if (!isFirebaseConfigured || !auth) return;
-    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-    });
-    return () => unsub();
-  }, []);
-
-  const handleSignOut = async () => {
-    if (!auth) return;
-    await signOut(auth);
-    addToast('Signed out of Firebase.', 'info');
-  };
 
   const selectedModelInfo = useMemo(
     () => models.find((m) => m.id === selectedModel) || null,
@@ -319,6 +317,7 @@ export default function App() {
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     const sessionId = syncMessagesToSession(nextMessages);
+    setPendingQuestion(question);
     setIsThinking(true);
 
     try {
@@ -335,6 +334,7 @@ export default function App() {
           chat_history: chatHistory,
           api_key: apiKey,
           model: selectedModel,
+          response_style: responseStyle,
         }),
       });
 
@@ -348,12 +348,22 @@ export default function App() {
 
       const citedSources = data.sources || [];
       setActiveSources(citedSources);
+      if (data.telemetry) {
+        setInspectedTelemetry(data.telemetry);
+        const t = data.telemetry.tokens || {};
+        setSessionTotals((prev) => ({
+          input_tokens: prev.input_tokens + (t.input_tokens || 0),
+          output_tokens: prev.output_tokens + (t.output_tokens || 0),
+          total_tokens: prev.total_tokens + (t.total_tokens || 0),
+        }));
+      }
       const completedMessages = [
         ...nextMessages,
         {
           role: 'assistant',
           content: data.answer || 'No answer returned.',
           sources: citedSources,
+          telemetry: data.telemetry || null,
         },
       ];
       setMessages(completedMessages);
@@ -377,14 +387,17 @@ export default function App() {
   };
 
   return (
-    <div className="relative min-h-screen md:h-screen w-screen overflow-y-auto md:overflow-hidden bg-slate-950 text-slate-100">
-      {/* Interactive 3D Floating Document & Data Galaxy Background */}
-      <DataGalaxy3D
-        sourcesList={sourcesList}
-        activeSources={activeSources}
-        isThinking={isThinking}
-        isResetting={isResetting}
-      />
+    <div className="relative h-[100dvh] w-screen overflow-hidden bg-slate-950 text-slate-100">
+      {/* Interactive 3D Floating Document & Data Galaxy Background (lazy-loaded) */}
+      <Suspense fallback={null}>
+        <DataGalaxy3D
+          sourcesList={sourcesList}
+          activeSources={activeSources}
+          hoveredSource={hoveredSource}
+          isThinking={isThinking}
+          isResetting={isResetting}
+        />
+      </Suspense>
 
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -400,18 +413,6 @@ export default function App() {
         onRefreshModels={fetchModels}
         selectedModel={selectedModel}
         onSelectModel={handleSelectModel}
-      />
-
-      {/* Firebase Authentication Modal */}
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
-        onAuthSuccess={(signedInUser) =>
-          addToast(
-            `Signed in as ${signedInUser.displayName || signedInUser.email}`,
-            'success'
-          )
-        }
       />
 
       {/* Ambient warm honey-gold, copper, and rose-blush glows matching the artwork */}
@@ -430,9 +431,16 @@ export default function App() {
         }}
       />
 
-      {/* Main Responsive Frosted-Glass Shell */}
-      <div className="pointer-events-none relative z-10 min-h-screen md:h-full w-full p-3 md:p-5 flex flex-col md:flex-row gap-4 justify-between">
-        <div className="pointer-events-auto max-h-[48vh] md:max-h-none md:h-full shrink-0">
+      {/* Main Mobile-First Frosted-Glass Shell */}
+      <div className="pointer-events-none relative z-10 h-full w-full p-2 sm:p-3 md:p-5 flex flex-col md:flex-row gap-2 md:gap-4 justify-between">
+        {/* Desktop Sidebar OR Mobile Sources/History View */}
+        <div
+          className={`pointer-events-auto flex-1 md:flex-none min-h-0 md:h-full shrink-0 ${
+            mobileView === 'sources' || mobileView === 'history'
+              ? 'block'
+              : 'hidden md:block'
+          }`}
+        >
           <KnowledgeSidebar
             sourcesList={sourcesList}
             activeSources={activeSources}
@@ -443,27 +451,151 @@ export default function App() {
             uploadError={uploadError}
             chatSessions={chatSessions}
             activeSessionId={activeSessionId}
-            onNewChat={handleNewChat}
-            onSelectSession={handleSelectSession}
+            onNewChat={() => {
+              handleNewChat();
+              setMobileView('chat');
+            }}
+            onSelectSession={(id) => {
+              handleSelectSession(id);
+              setMobileView('chat');
+            }}
             onDeleteSession={handleDeleteSession}
+            activeTab={sidebarTab}
+            onTabChange={(tab) => {
+              setSidebarTab(tab);
+              setMobileView(tab);
+            }}
           />
         </div>
 
-        <div className="pointer-events-auto flex-1 min-h-[55vh] md:min-h-0 md:h-full min-w-0">
+        {/* Full-Height Chat Panel */}
+        <div
+          className={`pointer-events-auto flex-1 min-h-0 md:h-full min-w-0 ${
+            mobileView === 'chat' ? 'block' : 'hidden md:block'
+          }`}
+        >
           <ChatPanel
             messages={messages}
             isThinking={isThinking}
             onSendMessage={handleSendMessage}
-            sourcesCount={sourcesList.length}
             selectedModelInfo={selectedModelInfo}
             selectedModel={selectedModel}
             hasApiKey={Boolean(apiKey.trim())}
             onOpenSettings={() => setIsSettingsOpen(true)}
-            user={user}
-            onOpenAuth={() => setIsAuthOpen(true)}
-            onSignOut={handleSignOut}
+            responseStyle={responseStyle}
+            onChangeResponseStyle={setResponseStyle}
+            isInspectorOpen={isInspectorOpen}
+            onToggleInspector={() => {
+              setIsInspectorOpen((prev) => {
+                const next = !prev;
+                if (next) setMobileView('xray');
+                else if (mobileView === 'xray') setMobileView('chat');
+                return next;
+              });
+            }}
+            onInspectMessage={(telemetry) => {
+              setInspectedTelemetry(telemetry);
+              setIsInspectorOpen(true);
+              setMobileView('xray');
+            }}
           />
         </div>
+
+        {/* Right-Side Collapsible RAG & LangChain X-Ray Inspector */}
+        {isInspectorOpen && (
+          <div
+            className={`pointer-events-auto flex-1 md:flex-none min-h-0 md:h-full shrink-0 ${
+              mobileView === 'xray' ? 'block' : 'hidden md:block'
+            }`}
+          >
+            <RagInspectorDrawer
+              isOpen={isInspectorOpen}
+              onClose={() => {
+                setIsInspectorOpen(false);
+                if (mobileView === 'xray') setMobileView('chat');
+              }}
+              telemetry={inspectedTelemetry}
+              sessionTotals={sessionTotals}
+              isThinking={isThinking}
+              pendingQuestion={pendingQuestion}
+              selectedModel={selectedModel}
+              selectedModelInfo={selectedModelInfo}
+              onHoverSource={setHoveredSource}
+            />
+          </div>
+        )}
+
+        {/* Mobile Bottom Tab Bar (Chat | Sources | History | X-Ray) */}
+        <nav
+          className="pointer-events-auto md:hidden shrink-0 flex items-center gap-1 p-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] rounded-2xl backdrop-blur-xl bg-slate-950/85 border border-white/15 shadow-2xl"
+          aria-label="Mobile navigation"
+        >
+          <button
+            type="button"
+            onClick={() => setMobileView('chat')}
+            className={`flex-1 flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+              mobileView === 'chat'
+                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chat</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSidebarTab('sources');
+              setMobileView('sources');
+            }}
+            className={`flex-1 flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+              mobileView === 'sources'
+                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>Sources</span>
+            {sourcesList.length > 0 && (
+              <span className="px-1 rounded-full text-[10px] bg-white/10 text-slate-200">
+                {sourcesList.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSidebarTab('history');
+              setMobileView('history');
+            }}
+            className={`flex-1 flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+              mobileView === 'history'
+                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <History className="w-3.5 h-3.5" />
+            <span>History</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsInspectorOpen(true);
+              setMobileView('xray');
+            }}
+            className={`flex-1 flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+              mobileView === 'xray'
+                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>X-Ray</span>
+          </button>
+        </nav>
       </div>
     </div>
   );

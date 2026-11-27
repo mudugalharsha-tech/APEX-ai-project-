@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -218,62 +219,242 @@ class RAGPipeline:
         chat_history: Optional[List[Any]] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        response_style: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run history-aware retrieval and return the AI answer with deduplicated sources."""
-        llm = self.get_llm(api_key=api_key, model=model)
-        retriever = self.vector_store.as_retriever(search_kwargs={"k": 4})
-
-        contextualize_q_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "Given a chat history and the latest user question which might reference "
-                    "context in the chat history, formulate a standalone question which can be "
-                    "understood without the chat history. Do NOT answer the question, just "
-                    "reformulate it if needed and otherwise return it as is.",
-                ),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ]
-        )
-        history_aware_retriever = create_history_aware_retriever(
-            llm, retriever, contextualize_q_prompt
-        )
-
-        qa_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful, knowledgeable AI assistant. You have access to retrieved "
-                    "context from the user's uploaded knowledge base below.\n"
-                    "- If the retrieved context is relevant to the user's question, use it to "
-                    "ground your answer accurately.\n"
-                    "- If the question is general or not covered by the retrieved context, answer "
-                    "naturally and helpfully using your general knowledge. Do NOT refuse to answer "
-                    "or say you don't know just because the topic is not in the uploaded sources.\n\n"
-                    "{context}",
-                ),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ]
-        )
-        question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-        rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
+        """Run history-aware retrieval and return the AI answer, sources, and X-Ray telemetry."""
+        total_start = time.perf_counter()
+        resolved_model = (model or "").strip() or self.model_name
+        llm = self.get_llm(api_key=api_key, model=resolved_model)
         formatted_history = self._format_chat_history(chat_history)
-        result = rag_chain.invoke({"input": question, "chat_history": formatted_history})
 
+        style_instructions = {
+            "tailored": (
+                "Tailor your response to the user's exact intent: lead with a clear, direct answer, "
+                "use clean Markdown headings or bullet points where helpful, highlight key terms in **bold**, "
+                "and avoid generic filler."
+            ),
+            "concise": (
+                "Be ultra-concise and direct. Give the core answer in 2-4 crisp sentences or short bullets "
+                "with zero fluff."
+            ),
+            "detailed": (
+                "Provide a thorough, well-structured deep dive with clear section headings, examples, "
+                "step-by-step reasoning, and a brief summary."
+            ),
+            "bullets": (
+                "Format your entire response as scannable, high-signal bullet points grouped by topic "
+                "with bold lead-ins."
+            ),
+            "technical": (
+                "Adopt a senior-engineer technical tone: include precise terminology, architecture/code "
+                "details, edge cases, and concrete implementation steps."
+            ),
+        }
+        chosen_style = (response_style or "tailored").strip().lower()
+        style_guide = style_instructions.get(chosen_style, style_instructions["tailored"])
+
+        # Step 1: History-aware query reformulation
+        if formatted_history:
+            contextualize_q_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Given a chat history and the latest user question which might reference "
+                        "context in the chat history, formulate a standalone question which can be "
+                        "understood without the chat history. Do NOT answer the question, just "
+                        "reformulate it if needed and otherwise return it as is.",
+                    ),
+                    MessagesPlaceholder("chat_history"),
+                    ("human", "{input}"),
+                ]
+            )
+            reformulate_msg = (contextualize_q_prompt | llm).invoke(
+                {"input": question, "chat_history": formatted_history}
+            )
+            reformulated_query = (
+                reformulate_msg.content.strip()
+                if isinstance(reformulate_msg.content, str) and reformulate_msg.content.strip()
+                else question
+            )
+        else:
+            reformulated_query = question
+
+        # Step 2: Check vector store count & filter by 0.35 similarity threshold
+        RELEVANCE_THRESHOLD = 0.35
+        doc_count = 0
+        raw_results: List[Tuple[Document, float]] = []
+        try:
+            doc_count = self.vector_store._collection.count()
+            if doc_count > 0:
+                raw_results = self.vector_store.similarity_search_with_relevance_scores(
+                    reformulated_query, k=4
+                )
+        except Exception:
+            raw_results = []
+
+        retrieved_chunks: List[Dict[str, Any]] = []
         sources: List[str] = []
-        seen = set()
-        for doc in result.get("context", []):
-            src = (doc.metadata or {}).get("source")
-            if src and src not in seen:
-                seen.add(src)
+        seen_sources = set()
+
+        for doc, score in raw_results:
+            clamped_score = max(0.0, min(1.0, float(score)))
+            if clamped_score < RELEVANCE_THRESHOLD:
+                continue
+
+            meta = doc.metadata or {}
+            src = meta.get("source") or "Unknown"
+            if src not in seen_sources:
+                seen_sources.add(src)
                 sources.append(src)
 
+            page_or_sheet = None
+            if meta.get("page") is not None:
+                try:
+                    page_or_sheet = f"Page {int(meta['page']) + 1}"
+                except (ValueError, TypeError):
+                    page_or_sheet = f"Page {meta['page']}"
+            elif meta.get("sheet"):
+                page_or_sheet = f"Sheet: {meta['sheet']}"
+
+            retrieved_chunks.append(
+                {
+                    "chunk_index": len(retrieved_chunks) + 1,
+                    "source": src,
+                    "page_or_sheet": page_or_sheet,
+                    "content": doc.page_content,
+                    "similarity_score": round(clamped_score, 4),
+                    "match_percent": round(clamped_score * 100, 1),
+                }
+            )
+
+        # Step 3: Hybrid Execution Path (RAG_GROUNDED vs LLM_GENERAL_KNOWLEDGE)
+        if retrieved_chunks:
+            answer_mode = "RAG_GROUNDED"
+            mode_reason = (
+                f"Matched {len(retrieved_chunks)} chunk"
+                f"{'s' if len(retrieved_chunks) != 1 else ''} above 35% similarity threshold"
+            )
+            context_text = "\n\n".join(c["content"] for c in retrieved_chunks)
+            system_instructions = (
+                "You are a helpful AI assistant. Answer the user's question primarily using the "
+                "retrieved context below. If the context only partially answers the question, you "
+                "may supplement it with your general knowledge, clearly distinguishing what came "
+                "from the uploaded sources.\n"
+                f"- Response Style Directive: {style_guide}"
+            )
+            qa_prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", f"{system_instructions}\n\nRetrieved Context:\n{{context}}"),
+                    MessagesPlaceholder("chat_history"),
+                    ("human", "{input}"),
+                ]
+            )
+            prompt_inputs = {
+                "context": context_text,
+                "chat_history": formatted_history,
+                "input": question,
+            }
+        else:
+            answer_mode = "LLM_GENERAL_KNOWLEDGE"
+            mode_reason = (
+                "Knowledge base is empty — used LLM pre-trained weights"
+                if doc_count == 0
+                else "No chunks met the 35% similarity threshold — used LLM pre-trained weights"
+            )
+            context_text = ""
+            system_instructions = (
+                "You are a helpful AI assistant. No relevant uploaded documents were found for "
+                "this query, so answer directly using your own pre-trained knowledge.\n"
+                f"- Response Style Directive: {style_guide}"
+            )
+            qa_prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", system_instructions),
+                    MessagesPlaceholder("chat_history"),
+                    ("human", "{input}"),
+                ]
+            )
+            prompt_inputs = {
+                "chat_history": formatted_history,
+                "input": question,
+            }
+
+        llm_start = time.perf_counter()
+        prompt_value = qa_prompt.invoke(prompt_inputs)
+        ai_message = llm.invoke(prompt_value)
+        llm_duration_ms = round((time.perf_counter() - llm_start) * 1000)
+        total_duration_ms = round((time.perf_counter() - total_start) * 1000)
+
+        answer_text = (
+            ai_message.content
+            if isinstance(ai_message.content, str)
+            else str(ai_message.content)
+        )
+
+        # Extract token usage from AIMessage.usage_metadata or response_metadata
+        usage = getattr(ai_message, "usage_metadata", None) or {}
+        resp_meta = getattr(ai_message, "response_metadata", None) or {}
+        token_usage = resp_meta.get("token_usage") or {}
+
+        approx_system = max(1, len(system_instructions) // 4)
+        approx_context = len(context_text) // 4
+        approx_history_q = max(
+            1,
+            (len(question) + sum(len(str(m.content)) for m in formatted_history)) // 4,
+        )
+
+        input_tokens = (
+            usage.get("input_tokens")
+            or token_usage.get("prompt_tokens")
+            or (approx_system + approx_context + approx_history_q)
+        )
+        output_tokens = (
+            usage.get("output_tokens")
+            or token_usage.get("completion_tokens")
+            or max(1, len(answer_text) // 4)
+        )
+        total_tokens = (
+            usage.get("total_tokens")
+            or token_usage.get("total_tokens")
+            or (input_tokens + output_tokens)
+        )
+
+        telemetry = {
+            "answer_mode": answer_mode,
+            "mode_reason": mode_reason,
+            "raw_query": question,
+            "reformulated_query": reformulated_query,
+            "was_reformulated": reformulated_query.strip() != question.strip(),
+            "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+            "llm_model": resolved_model,
+            "response_style": chosen_style,
+            "llm_duration_ms": llm_duration_ms,
+            "total_duration_ms": total_duration_ms,
+            "retrieved_chunks": retrieved_chunks,
+            "tokens": {
+                "input_tokens": int(input_tokens),
+                "output_tokens": int(output_tokens),
+                "total_tokens": int(total_tokens),
+                "breakdown": {
+                    "system_tokens": approx_system,
+                    "context_tokens": approx_context,
+                    "history_question_tokens": approx_history_q,
+                },
+            },
+            "prompt_anatomy": {
+                "system_prompt": system_instructions,
+                "context_block": context_text or "(Skipped — Base LLM Knowledge mode)",
+                "history_messages_count": len(formatted_history),
+                "user_question": question,
+            },
+        }
+
         return {
-            "answer": result.get("answer", ""),
+            "answer": answer_text,
             "sources": sources,
+            "answer_mode": answer_mode,
+            "mode_reason": mode_reason,
+            "telemetry": telemetry,
         }
 
     def chat(

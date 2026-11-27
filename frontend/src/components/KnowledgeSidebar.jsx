@@ -13,6 +13,7 @@ import {
   Trash2,
   UploadCloud,
   Video,
+  X,
 } from 'lucide-react';
 
 function getSourceIcon(type) {
@@ -47,11 +48,16 @@ export default function KnowledgeSidebar({
   onNewChat,
   onSelectSession,
   onDeleteSession,
+  onCloseMobile,
+  activeTab: controlledTab,
+  onTabChange,
 }) {
   const fileInputRef = useRef(null);
   const [urlInput, setUrlInput] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState('sources'); // 'sources' | 'history'
+  const [internalTab, setInternalTab] = useState('sources');
+  const activeTab = controlledTab || internalTab;
+  const setActiveTab = onTabChange || setInternalTab;
 
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files || []);
@@ -80,21 +86,21 @@ export default function KnowledgeSidebar({
 
   return (
     <aside className="w-full md:w-80 lg:w-96 shrink-0 flex flex-col gap-3.5 p-4 rounded-2xl backdrop-blur-xl bg-slate-950/60 border border-white/15 shadow-2xl h-full overflow-hidden">
-      {/* Sidebar Header + Tab Switcher */}
-      <div className="flex items-center justify-between gap-2 pb-3 border-b border-white/10">
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/[0.04] border border-white/10 flex-1">
+      {/* Sidebar Header + Tab Switcher (mobile-first fit) */}
+      <div className="flex items-center justify-between gap-1.5 pb-3 border-b border-white/10">
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-white/[0.04] border border-white/10 flex-1 min-w-0">
           <button
             type="button"
             onClick={() => setActiveTab('sources')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+            className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-1.5 px-1.5 sm:px-2.5 rounded-lg text-[11px] sm:text-xs font-medium transition-colors cursor-pointer ${
               activeTab === 'sources'
                 ? 'bg-amber-500/20 text-amber-200 border border-amber-500/35'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Database className="w-3.5 h-3.5" />
-            <span>Sources</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-slate-300">
+            <Database className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Sources</span>
+            <span className="px-1.5 rounded-full text-[10px] bg-white/10 text-slate-300 shrink-0">
               {sourcesList.length}
             </span>
           </button>
@@ -102,15 +108,15 @@ export default function KnowledgeSidebar({
           <button
             type="button"
             onClick={() => setActiveTab('history')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+            className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-1.5 px-1.5 sm:px-2.5 rounded-lg text-[11px] sm:text-xs font-medium transition-colors cursor-pointer ${
               activeTab === 'history'
                 ? 'bg-amber-500/20 text-amber-200 border border-amber-500/35'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <History className="w-3.5 h-3.5" />
-            <span>History</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-slate-300">
+            <History className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">History</span>
+            <span className="px-1.5 rounded-full text-[10px] bg-white/10 text-slate-300 shrink-0">
               {chatSessions.length}
             </span>
           </button>
@@ -119,11 +125,22 @@ export default function KnowledgeSidebar({
         <button
           type="button"
           onClick={onNewChat}
-          className="p-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 transition-colors cursor-pointer"
+          className="p-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 transition-colors cursor-pointer shrink-0"
           title="New Chat"
         >
           <Plus className="w-4 h-4" />
         </button>
+
+        {onCloseMobile && (
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            className="md:hidden p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.1] border border-white/15 text-slate-300 transition-colors cursor-pointer shrink-0"
+            aria-label="Close drawer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {activeTab === 'sources' ? (
@@ -303,7 +320,7 @@ export default function KnowledgeSidebar({
                         e.stopPropagation();
                         onDeleteSession(session.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-500/15 transition-all cursor-pointer"
+                      className="opacity-75 md:opacity-0 md:group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-rose-500/15 transition-all cursor-pointer shrink-0"
                       title="Delete conversation"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

@@ -36,6 +36,10 @@ class ChatRequest(BaseModel):
     )
     api_key: Optional[str] = Field(default=None, description="Optional OpenRouter API key")
     model: Optional[str] = Field(default=None, description="Optional OpenRouter model ID")
+    response_style: Optional[str] = Field(
+        default="tailored",
+        description="Response style: tailored, concise, detailed, bullets, or technical",
+    )
 
 
 def _is_zero_price(val: Any) -> bool:
@@ -136,6 +140,7 @@ def chat(payload: ChatRequest) -> dict:
             chat_history=payload.chat_history,
             api_key=payload.api_key,
             model=payload.model,
+            response_style=payload.response_style,
         )
     except MissingAPIKeyError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
