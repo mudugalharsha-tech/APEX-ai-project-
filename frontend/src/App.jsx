@@ -8,7 +8,24 @@ import RagInspectorDrawer from './components/RagInspectorDrawer';
 
 const DataGalaxy3D = lazy(() => import('./components/DataGalaxy3D'));
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+    ? `http://${window.location.hostname}:8000`
+    : 'http://localhost:8000');
+
+async function parseJsonResponse(res) {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(
+      res.status >= 500
+        ? `Server error (${res.status}). If using Render Free, the backend may be waking up—please try again in 30s.`
+        : `Unexpected response (${res.status})`
+    );
+  }
+}
 const SOURCES_STORAGE_KEY = 'aura_rag_sources';
 const SESSIONS_STORAGE_KEY = 'aura_rag_sessions';
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
@@ -260,7 +277,7 @@ export default function App() {
           headers: getDeviceHeaders(),
           body: formData,
         });
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
         if (!res.ok) {
           throw new Error(data.detail || `Failed to upload ${file.name}`);
         }
@@ -301,7 +318,7 @@ export default function App() {
         },
         body: JSON.stringify({ url }),
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to ingest URL.');
       }

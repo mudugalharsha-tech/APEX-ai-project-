@@ -145,28 +145,30 @@ export default function KnowledgeSidebar({
 
       {activeTab === 'sources' ? (
         <>
-          {/* File Dropzone / Picker */}
-          <div
+          {/* File Dropzone / Native Mobile-Friendly Label Picker */}
+          <label
+            htmlFor="rag-file-upload"
             onDragOver={(e) => {
               e.preventDefault();
               setIsDragging(true);
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            onClick={() => !isUploading && fileInputRef.current?.click()}
-            className={`group cursor-pointer rounded-xl border border-dashed p-4 text-center transition-all ${
+            className={`block group cursor-pointer rounded-xl border border-dashed p-4 text-center transition-all ${
               isDragging
                 ? 'border-amber-400 bg-amber-500/10'
                 : 'border-white/20 bg-white/[0.02] hover:border-amber-500/50 hover:bg-white/[0.04]'
-            }`}
+            } ${isUploading ? 'pointer-events-none opacity-70' : ''}`}
           >
             <input
+              id="rag-file-upload"
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".pdf,.docx,.txt,.csv,.xlsx,.xls"
+              disabled={isUploading}
+              accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.txt,text/plain,.csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               onChange={handleFileChange}
-              className="hidden"
+              className="sr-only"
             />
             <div className="flex flex-col items-center gap-1.5">
               {isUploading ? (
@@ -175,13 +177,13 @@ export default function KnowledgeSidebar({
                 <UploadCloud className="w-6 h-6 text-slate-400 group-hover:text-amber-400 transition-colors" />
               )}
               <p className="text-xs font-medium text-slate-200">
-                {isUploading ? 'Ingesting into Chroma...' : 'Drop files or click to browse'}
+                {isUploading ? 'Ingesting into Chroma...' : 'Tap or drop files to upload'}
               </p>
               <p className="text-[11px] text-slate-400">
                 PDF, DOCX, TXT, CSV, XLSX
               </p>
             </div>
-          </div>
+          </label>
 
           {/* URL / YouTube Input */}
           <form onSubmit={handleUrlSubmit} className="flex gap-2">
