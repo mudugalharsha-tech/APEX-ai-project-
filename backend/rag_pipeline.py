@@ -11,8 +11,6 @@ from urllib.parse import urlparse
 
 import pandas as pd
 from dotenv import load_dotenv
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import (
     CSVLoader,
