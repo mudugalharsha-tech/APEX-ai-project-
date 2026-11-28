@@ -82,7 +82,7 @@ export default function App() {
     () => localStorage.getItem(API_KEY_STORAGE_KEY) || ''
   );
   const [selectedModel, setSelectedModel] = useState(
-    () => localStorage.getItem(MODEL_STORAGE_KEY) || 'openai/gpt-4o-mini'
+    () => localStorage.getItem(MODEL_STORAGE_KEY) || 'openrouter/free'
   );
   const [models, setModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -202,7 +202,17 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to load OpenRouter models.');
       }
-      setModels(data.models || []);
+      const loadedModels = data.models || [];
+      setModels(loadedModels);
+      if (!localStorage.getItem(MODEL_STORAGE_KEY) && loadedModels.length > 0) {
+        const freeRouter = loadedModels.find((m) => m.id === 'openrouter/free');
+        const firstFree = loadedModels.find((m) => m.is_free);
+        if (freeRouter) {
+          setSelectedModel(freeRouter.id);
+        } else if (firstFree) {
+          setSelectedModel(firstFree.id);
+        }
+      }
     } catch (err) {
       addToast(err.message || 'Could not fetch live OpenRouter models.', 'error');
     } finally {

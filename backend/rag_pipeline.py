@@ -96,7 +96,7 @@ class RAGPipeline:
     """Multi-format RAG pipeline backed by Chroma, HuggingFaceEmbeddings, and OpenRouter."""
 
     def __init__(self) -> None:
-        self.model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+        self.model_name = os.getenv("OPENROUTER_MODEL", "openrouter/free")
         persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
         persist_path = Path(persist_dir)
         if not persist_path.is_absolute():
